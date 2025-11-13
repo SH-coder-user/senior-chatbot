@@ -25,6 +25,14 @@ const GROUP_OPTIONS = {
 
 const DETAIL_SILENCE_MS = 5000;
 const PRINT_COUNTDOWN_SECONDS = 20;
+const SCREEN_LABELS = {
+  home: '대기 중',
+  listening: '음성 수집',
+  processing: '분석 중',
+  response: '응답 중',
+  choice: '사용자 선택 대기',
+  thankyou: '대화 종료'
+};
 
 const guidanceLibrary = {
   '시설': {
@@ -71,18 +79,21 @@ const guidanceLibrary = {
   }
 };
 
+const INITIAL_CONVERSATION_STATE = Object.freeze({
+  groupType: '',
+  detailCategory: '',
+  agency: '',
+  summary: '',
+  fullText: '',
+  requiresVisit: false,
+  guidance: '',
+  printRequested: false
+});
+
+const createInitialConversationState = () => ({ ...INITIAL_CONVERSATION_STATE });
+
 const SeniorChatbot = () => {
   const [screen, setScreen] = useState('home'); // home, listening, processing, response, thankyou
-  const createInitialConversationState = () => ({
-    groupType: '',
-    detailCategory: '',
-    agency: '',
-    summary: '',
-    fullText: '',
-    requiresVisit: false,
-    guidance: '',
-    printRequested: false
-  });
   const [conversationData, setConversationData] = useState(createInitialConversationState);
   const [isListening, setIsListening] = useState(false);
   const [currentQuestion, setCurrentQuestion] = useState('');
@@ -100,15 +111,6 @@ const SeniorChatbot = () => {
   const timeoutRef = useRef(null);
   const silenceTimeoutRef = useRef(null);
   const choiceOptionsRef = useRef([]);
-
-  const screenLabels = {
-    home: '대기 중',
-    listening: '음성 수집',
-    processing: '분석 중',
-    response: '응답 중',
-    choice: '사용자 선택 대기',
-    thankyou: '대화 종료'
-  };
 
   useEffect(() => {
     if (flowStage !== FLOW_STAGES.PRINT_CONFIRM) {
@@ -163,26 +165,6 @@ const SeniorChatbot = () => {
     if (afterSpeech) {
       setTimeout(afterSpeech, delay);
     }
-  };
-
-  const screenLabels = {
-    home: '대기 중',
-    listening: '음성 수집',
-    processing: '분석 중',
-    response: '응답 중',
-    choice: '사용자 선택 대기',
-    thankyou: '대화 종료'
-  };
-
-  const addDebugLog = (label, payload) => {
-    setDebugLogs(prev => [
-      ...prev,
-      {
-        timestamp: new Date().toLocaleTimeString(),
-        label,
-        payload
-      }
-    ]);
   };
 
   // 음성 합성 함수
@@ -318,10 +300,10 @@ const SeniorChatbot = () => {
       promptGroupSelection();
       return;
     }
-    setConversationData((prev) => ({
+    setConversationData({
       ...createInitialConversationState(),
       groupType: groupKey
-    }));
+    });
     setFlowStage(FLOW_STAGES.DETAIL);
     const message = `${selected.label} 민원으로 접수하겠습니다. 위치, 시간, 어떤 불편이 있었는지 5초 이상 조용하면 자동으로 녹음이 종료됩니다.`;
     speakAndDisplay(message, {
@@ -946,7 +928,7 @@ const SeniorChatbot = () => {
           <div>
             <p className="text-sm text-gray-500">현재 상태</p>
             <p className="text-xl font-semibold text-gray-800">
-              {screenLabels[screen] || '진행 중'}
+              {SCREEN_LABELS[screen] || '진행 중'}
             </p>
           </div>
           <div className="flex gap-3">
