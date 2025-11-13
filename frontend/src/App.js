@@ -165,6 +165,26 @@ const SeniorChatbot = () => {
     }
   };
 
+  const screenLabels = {
+    home: '대기 중',
+    listening: '음성 수집',
+    processing: '분석 중',
+    response: '응답 중',
+    choice: '사용자 선택 대기',
+    thankyou: '대화 종료'
+  };
+
+  const addDebugLog = (label, payload) => {
+    setDebugLogs(prev => [
+      ...prev,
+      {
+        timestamp: new Date().toLocaleTimeString(),
+        label,
+        payload
+      }
+    ]);
+  };
+
   // 음성 합성 함수
   const speak = (text) => {
     if ('speechSynthesis' in window) {
