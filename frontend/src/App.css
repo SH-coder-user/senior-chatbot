@@ -1,38 +1,92 @@
-.App {
+/* Main container for the chatbot application */
+.chatbot-container {
+  width: 100%;
+  max-width: 800px; /* A comfortable max-width */
+  margin: 2rem auto;
+  padding: 2rem;
+  background-color: #ffffff;
+  border-radius: 24px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.05);
   text-align: center;
 }
 
-.App-logo {
-  height: 40vmin;
-  pointer-events: none;
+/* Larger and clearer headings */
+.main-title {
+  font-size: 3.5rem; /* Increased size */
+  font-weight: 700;
+  color: #1e3a8a; /* Dark blue for strong presence */
+  margin-bottom: 1rem;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  .App-logo {
-    animation: App-logo-spin infinite 20s linear;
-  }
+.subtitle {
+  font-size: 1.75rem; /* Increased size */
+  color: #4b5563;
+  margin-bottom: 2rem;
 }
 
-.App-header {
-  background-color: #282c34;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  font-size: calc(10px + 2vmin);
-  color: white;
+.description {
+  font-size: 1.5rem; /* Increased size */
+  color: #6b7280;
+  margin-bottom: 3rem;
 }
 
-.App-link {
-  color: #61dafb;
+/* Big, friendly buttons */
+.action-button {
+  font-size: 2.5rem !important; /* Force larger font size */
+  font-weight: 700 !important;
+  padding: 2rem 3.5rem !important; /* More padding */
+  border-radius: 24px !important; /* Softer corners */
+  background-color: #2563eb !important; /* Vibrant blue */
+  color: white !important;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.4);
+  transition: all 0.2s ease-in-out;
 }
 
-@keyframes App-logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+.action-button:hover {
+  background-color: #1d4ed8 !important; /* Darker on hover */
+  transform: translateY(-2px);
+}
+
+.choice-button {
+  font-size: 2rem !important;
+  padding: 1.75rem 2.5rem !important;
+  border-radius: 20px !important;
+}
+
+/* Styles for the listening/processing states */
+.status-heading {
+  font-size: 3rem;
+  font-weight: 700;
+  color: #1f2937;
+  margin-bottom: 1rem;
+}
+
+.status-text {
+  font-size: 1.75rem;
+  color: #4b5563;
+}
+
+/* Response text box */
+.response-box {
+  background-color: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 24px;
+  padding: 2.5rem;
+  margin-top: 2rem;
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);
+}
+
+.response-text {
+  font-size: 2rem;
+  color: #1f2937;
+  line-height: 1.8;
+  white-space: pre-line;
+}
+
+/* Countdown text */
+.countdown-text {
+  font-size: 1.5rem;
+  color: #ef4444; /* Red color to indicate urgency */
+  margin-top: 1.5rem;
+  font-weight: 600;
 }

@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Mic, Volume2, Home } from 'lucide-react';
+import PrintModal from './PrintModal'; // Import the modal component
+import './App.css'; // Import the new App.css for styling
 
 const FLOW_STAGES = {
   READY: 'ready',
@@ -93,7 +95,7 @@ const INITIAL_CONVERSATION_STATE = Object.freeze({
 const createInitialConversationState = () => ({ ...INITIAL_CONVERSATION_STATE });
 
 const SeniorChatbot = () => {
-  const [screen, setScreen] = useState('home'); // home, listening, processing, response, thankyou
+  const [screen, setScreen] = useState('home');
   const [conversationData, setConversationData] = useState(createInitialConversationState);
   const [isListening, setIsListening] = useState(false);
   const [currentQuestion, setCurrentQuestion] = useState('');
@@ -105,12 +107,15 @@ const SeniorChatbot = () => {
   const [choiceOptions, setChoiceOptions] = useState([]);
   const [choicePrompt, setChoicePrompt] = useState('');
   const [printCountdown, setPrintCountdown] = useState(PRINT_COUNTDOWN_SECONDS);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [showPrintModal, setShowPrintModal] = useState(false); // State for print modal
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const timeoutRef = useRef(null);
   const silenceTimeoutRef = useRef(null);
   const choiceOptionsRef = useRef([]);
+  const speechUtteranceRef = useRef(null);
 
   useEffect(() => {
     if (flowStage !== FLOW_STAGES.PRINT_CONFIRM) {
@@ -144,13 +149,49 @@ const SeniorChatbot = () => {
     choiceOptionsRef.current = options;
   };
 
-  const speakAndDisplay = (
+  const speak = (text) => {
+    return new Promise((resolve) => {
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'ko-KR';
+        utterance.rate = 0.9;
+        utterance.pitch = 1.0;
+        utterance.volume = 1.0;
+        
+        utterance.onstart = () => {
+          setIsSpeaking(true);
+          addDebugLog('음성 출력 시작', { text });
+        };
+        
+        utterance.onend = () => {
+          setIsSpeaking(false);
+          addDebugLog('음성 출력 완료', { text });
+          resolve();
+        };
+        
+        utterance.onerror = (error) => {
+          setIsSpeaking(false);
+          addDebugLog('음성 출력 오류', error);
+          resolve();
+        };
+        
+        speechUtteranceRef.current = utterance;
+        window.speechSynthesis.speak(utterance);
+      } else {
+        resolve();
+      }
+    });
+  };
+
+  const speakAndDisplay = async (
     text,
     { expectChoice = false, afterSpeech, stage = flowStage, options = null } = {}
   ) => {
     setCurrentQuestion(text);
     setChatHistory(prev => [...prev, { speaker: 'assistant', text }]);
-    addDebugLog('응답 출력', { stage, text });
+    addDebugLog('응답 출력', { stage, text, expectChoice });
+    
     if (expectChoice) {
       setChoicePrompt(text);
       updateChoiceOptions(options || buildYesNoOptions());
@@ -160,23 +201,11 @@ const SeniorChatbot = () => {
       updateChoiceOptions([]);
       setScreen('response');
     }
-    speak(text);
-    const delay = Math.max(2500, text.length * 70);
+    
+    await speak(text);
+    
     if (afterSpeech) {
-      setTimeout(afterSpeech, delay);
-    }
-  };
-
-  // 음성 합성 함수
-  const speak = (text) => {
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = 'ko-KR';
-      utterance.rate = 0.85; // 천천히
-      utterance.pitch = 1.0;
-      utterance.volume = 1.0;
-      window.speechSynthesis.speak(utterance);
+      afterSpeech();
     }
   };
 
@@ -275,7 +304,7 @@ const SeniorChatbot = () => {
     promptGroupSelection();
   };
 
-  function promptGroupSelection() {
+  async function promptGroupSelection() {
     setConversationData(createInitialConversationState());
     setFlowStage(FLOW_STAGES.GROUP_SELECTION);
     const options = Object.entries(GROUP_OPTIONS).map(([value, meta]) => ({
@@ -286,18 +315,22 @@ const SeniorChatbot = () => {
       voiceMatches: meta.voiceMatches
     }));
     const prompt =
-      '안내를 시작합니다. 개인/생활 또는 공공 민원인지 버튼을 누르거나 음성으로 말씀해 주세요. 잘못 말씀하시면 다시 처음 화면으로 돌아갑니다.';
-    speakAndDisplay(prompt, {
+      '안녕하세요. 무엇을 도와드릴까요? 개인/생활 민원인지, 공공 민원인지 골라주세요.';
+    await speakAndDisplay(prompt, {
       expectChoice: true,
       stage: FLOW_STAGES.GROUP_SELECTION,
       options
     });
   }
 
-  function handleGroupSelection(groupKey) {
+  async function handleGroupSelection(groupKey) {
     const selected = GROUP_OPTIONS[groupKey];
     if (!selected) {
-      promptGroupSelection();
+      await speakAndDisplay('다시 선택해 주세요.', {
+        expectChoice: false,
+        stage: FLOW_STAGES.GROUP_SELECTION,
+        afterSpeech: () => promptGroupSelection()
+      });
       return;
     }
     setConversationData({
@@ -305,41 +338,55 @@ const SeniorChatbot = () => {
       groupType: groupKey
     });
     setFlowStage(FLOW_STAGES.DETAIL);
-    const message = `${selected.label} 민원으로 접수하겠습니다. 위치, 시간, 어떤 불편이 있었는지 5초 이상 조용하면 자동으로 녹음이 종료됩니다.`;
-    speakAndDisplay(message, {
+    const message = `${selected.label} 민원을 선택하셨습니다. 어떤 점이 불편하신지 자세히 말씀해주세요. 이야기가 끝나면 녹음이 자동으로 종료됩니다.`;
+    await speakAndDisplay(message, {
       stage: FLOW_STAGES.DETAIL,
-      afterSpeech: () => startRecording(FLOW_STAGES.DETAIL)
+      expectChoice: false,
+      afterSpeech: () => {
+        setTimeout(() => startRecording(FLOW_STAGES.DETAIL), 1000);
+      }
     });
   }
 
-  const handleYesNoChoice = (isYes) => {
+  const handleYesNoChoice = async (isYes) => {
     addDebugLog('사용자 선택', { stage: flowStage, choice: isYes ? '예' : '아니오' });
     if (flowStage === FLOW_STAGES.SUMMARY_CONFIRM) {
       if (isYes) {
-        handleAIDecision();
+        await handleAIDecision();
       } else {
-        speakAndDisplay('민원 유형 선택 단계로 돌아가 다시 안내해 드릴게요.', {
+        await speakAndDisplay('처음부터 다시 시작하겠습니다.', {
           stage: FLOW_STAGES.GROUP_SELECTION,
-          afterSpeech: () => promptGroupSelection()
+          expectChoice: false,
+          afterSpeech: () => {
+            setTimeout(() => promptGroupSelection(), 1000);
+          }
         });
       }
       return;
     }
     if (flowStage === FLOW_STAGES.PRINT_CONFIRM) {
-      handlePrintDecision(isYes);
+      await handlePrintDecision(isYes);
     }
   };
 
-  const handleFinishAcknowledgement = () => {
-    const department = conversationData.agency || '담당 부서';
-    const closing = `${department}에 전달을 완료했습니다. 안내를 마치고 처음 화면으로 돌아갑니다.`;
-    completeFlow(closing);
+  const handleFinishAcknowledgement = async () => {
+    setFlowStage(FLOW_STAGES.PRINT_CONFIRM);
+    setPrintCountdown(PRINT_COUNTDOWN_SECONDS);
+    
+    const summaryMessage = `접수된 내용을 출력해서 보관하시겠습니까? 20초 안에 '예' 또는 '아니오'로 답해주세요.`;
+    
+    await speakAndDisplay(summaryMessage, {
+      expectChoice: true,
+      stage: FLOW_STAGES.PRINT_CONFIRM,
+      options: buildYesNoOptions()
+    });
   };
 
-  const handleAIDecision = () => {
+  const handleAIDecision = async () => {
     if (!conversationData.summary) {
-      speakAndDisplay('민원 내용을 먼저 들려주시면 도와드릴 수 있습니다.', {
+      await speakAndDisplay('민원 내용을 먼저 말씀해주세요.', {
         stage: FLOW_STAGES.DETAIL,
+        expectChoice: false,
         afterSpeech: () => startRecording(FLOW_STAGES.DETAIL)
       });
       return;
@@ -357,15 +404,15 @@ const SeniorChatbot = () => {
       guidance: guidanceText
     }));
     if (requiresVisit) {
-      handleVisitFlow(agency, guidanceText);
+      await handleVisitFlow(agency, guidanceText);
     } else {
-      handleDocumentGuidance(guidanceText);
+      await handleDocumentGuidance(guidanceText);
     }
   };
 
-  const handleVisitFlow = (agency, guidanceText) => {
+  const handleVisitFlow = async (agency, guidanceText) => {
     setFlowStage(FLOW_STAGES.VISIT_HANDOFF);
-    const message = `${guidanceText}\n\n${agency} 담당자가 현장 조사가 필요한 민원으로 판단했습니다. 방문 일정을 잡고 안내드리겠습니다. 안내를 마치려면 확인 버튼을 누르거나 확인이라고 말씀해 주세요.`;
+    const message = `${agency}에서 현장 확인이 필요하다고 판단했습니다. ${guidanceText}`;
     const options = [
       {
         key: 'finish',
@@ -374,73 +421,87 @@ const SeniorChatbot = () => {
         voiceMatches: ['확인', '예', '네', '그래']
       }
     ];
-    speakAndDisplay(message, {
+    await speakAndDisplay(message, {
       expectChoice: true,
       stage: FLOW_STAGES.VISIT_HANDOFF,
       options
     });
   };
 
-  const handleDocumentGuidance = (guidanceText) => {
+  const handleDocumentGuidance = async (guidanceText) => {
     setFlowStage(FLOW_STAGES.DOCUMENT_GUIDE);
-    const message = `${guidanceText}\n\n안내된 서류를 준비하시면 공공기관에서 바로 접수를 도와드릴 수 있습니다.`;
-    speakAndDisplay(message, {
+    const message = `필요한 서류 안내입니다. ${guidanceText}`;
+    await speakAndDisplay(message, {
       stage: FLOW_STAGES.DOCUMENT_GUIDE,
-      afterSpeech: () => promptPrintQuestion()
+      expectChoice: false,
+      afterSpeech: () => {
+        setTimeout(() => promptPrintQuestion(), 1000);
+      }
     });
   };
 
-  const promptPrintQuestion = () => {
+  const promptPrintQuestion = async () => {
     setFlowStage(FLOW_STAGES.PRINT_CONFIRM);
     setPrintCountdown(PRINT_COUNTDOWN_SECONDS);
-    const message = '필요 서류를 A4 용지에 출력하시겠습니까? 예 또는 아니오로 말씀하거나 버튼을 눌러 주세요. 이 화면은 20초 동안 유지됩니다.';
-    speakAndDisplay(message, {
+    const message = '안내 내용을 종이로 출력하시겠습니까?';
+    await speakAndDisplay(message, {
       expectChoice: true,
       stage: FLOW_STAGES.PRINT_CONFIRM,
       options: buildYesNoOptions()
     });
   };
 
-  const handlePrintDecision = (isYes) => {
+  const handlePrintDecision = async (isYes) => {
     setConversationData((prev) => ({
       ...prev,
       printRequested: isYes
     }));
-    const closing = isYes
-      ? '안내된 서류를 A4 용지로 출력하도록 담당자에게 전달했습니다. 출력이 완료되면 화면에 표시됩니다.'
-      : '서류 출력 없이 절차만 안내하도록 기록했습니다.';
-    completeFlow(`${closing} 이용해 주셔서 감사합니다.`);
+    if (isYes) {
+      setShowPrintModal(true); // Show the modal
+    } else {
+      const closing = '출력하지 않고 민원 접수를 마칩니다. 이용해주셔서 감사합니다.';
+      await completeFlow(closing);
+    }
+  };
+
+  const handleCloseModalAndReset = async () => {
+    setShowPrintModal(false);
+    const closing = '민원 접수가 완료되었습니다. 이용해주셔서 감사합니다.';
+    await completeFlow(closing);
   };
 
   const completeFlow = async (closingMessage) => {
     await saveComplaint();
-    speakAndDisplay(closingMessage, {
+    await speakAndDisplay(closingMessage, {
       stage: FLOW_STAGES.COMPLETE,
+      expectChoice: false,
       afterSpeech: () => {
         setScreen('thankyou');
-        setTimeout(() => resetConversation(), 6000);
+        setTimeout(() => resetConversation(), 5000);
       }
     });
   };
 
-  // 음성 녹음 시작
-  const startRecording = async (stageForInput = flowStage) => {
+  const startRecording = async (stageForInput) => {
     if (isListening) {
       return;
     }
+    
+    const recordingStage = stageForInput || flowStage;
+    addDebugLog('녹음 시작 요청', { stage: recordingStage, flowStage });
+    
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaRecorderRef.current = new MediaRecorder(stream);
       audioChunksRef.current = [];
-      addDebugLog('녹음 시작', { stage: stageForInput });
 
       const resetSilenceTimer = () => {
         if (silenceTimeoutRef.current) {
           clearTimeout(silenceTimeoutRef.current);
         }
-        if (stageForInput === FLOW_STAGES.DETAIL) {
+        if (recordingStage === FLOW_STAGES.DETAIL) {
           silenceTimeoutRef.current = setTimeout(() => {
-            addDebugLog('무응답 자동 종료', { stage: stageForInput });
+            addDebugLog('무응답 자동 종료', { stage: recordingStage });
             stopRecording();
           }, DETAIL_SILENCE_MS);
         }
@@ -461,8 +522,8 @@ const SeniorChatbot = () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
         setIsListening(false);
         setScreen('processing');
-        addDebugLog('녹음 종료', { size: audioBlob.size, stage: stageForInput });
-        await processAudio(audioBlob, stageForInput);
+        addDebugLog('녹음 종료', { size: audioBlob.size, stage: recordingStage });
+        await processAudio(audioBlob, recordingStage);
         stream.getTracks().forEach((track) => track.stop());
       };
 
@@ -485,7 +546,6 @@ const SeniorChatbot = () => {
     }
   };
 
-  // 음성 녹음 중지
   const stopRecording = () => {
     if (silenceTimeoutRef.current) {
       clearTimeout(silenceTimeoutRef.current);
@@ -498,44 +558,27 @@ const SeniorChatbot = () => {
     }
   };
 
-  // Whisper API로 음성을 텍스트로 변환
-  const processAudio = async (audioBlob, stageForInput = flowStage) => {
+  const processAudio = async (audioBlob, stageForInput) => {
+    const currentStage = stageForInput || flowStage;
     setScreen('processing');
-    addDebugLog('음성 처리 시작', { size: audioBlob.size, stage: stageForInput });
+    addDebugLog('음성 처리 시작', { size: audioBlob.size, stage: currentStage });
 
     try {
-      // 실제 Whisper API 호출 (여기서는 시뮬레이션)
-      // const formData = new FormData();
-      // formData.append('file', audioBlob, 'audio.webm');
-      // formData.append('model', 'whisper-1');
-      // formData.append('language', 'ko');
-      
-      // const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      //   method: 'POST',
-      //   headers: {
-      //     'Authorization': `Bearer ${YOUR_API_KEY}`
-      //   },
-      //   body: formData
-      // });
-      // const result = await response.json();
-      // const userText = result.text;
-
-      // 시뮬레이션 (실제로는 위 코드 사용)
       await new Promise(resolve => setTimeout(resolve, 2000));
       let userText = '예';
-      if (stageForInput === FLOW_STAGES.GROUP_SELECTION) {
+      if (currentStage === FLOW_STAGES.GROUP_SELECTION) {
         userText = '개인 민원입니다';
-      } else if (stageForInput === FLOW_STAGES.DETAIL) {
+      } else if (currentStage === FLOW_STAGES.DETAIL) {
         userText = '우리 동네 공원에 가로등이 고장나서 밤에 너무 어두워요. 언제 고칠 수 있을까요?';
       }
-      addDebugLog('음성 → 텍스트 결과', { stage: stageForInput, text: userText });
+      addDebugLog('음성 → 텍스트 결과', { stage: currentStage, text: userText });
 
-      await handleStageInput(userText, stageForInput);
+      await handleStageInput(userText, currentStage);
 
     } catch (error) {
       console.error('음성 처리 오류:', error);
       addDebugLog('음성 처리 오류', error.message);
-      speak('죄송합니다. 다시 한 번 말씀해 주시겠어요?');
+      await speak('죄송합니다. 다시 한 번 말씀해 주시겠어요?');
       setScreen('home');
     }
   };
@@ -545,13 +588,13 @@ const SeniorChatbot = () => {
     const targetStage = stageOverride || flowStage;
     if (!trimmedText) {
       if (targetStage === FLOW_STAGES.DETAIL) {
-        handleDetailResponse('');
+        await handleDetailResponse('');
       } else if (
         targetStage === FLOW_STAGES.GROUP_SELECTION ||
         targetStage === FLOW_STAGES.SUMMARY_CONFIRM ||
         targetStage === FLOW_STAGES.PRINT_CONFIRM
       ) {
-        speakAndDisplay('입력이 감지되지 않았습니다. 버튼을 누르거나 다시 말씀해 주세요.', {
+        await speakAndDisplay('입력이 감지되지 않았습니다. 다시 말씀해주세요.', {
           expectChoice: true,
           stage: targetStage
         });
@@ -566,13 +609,13 @@ const SeniorChatbot = () => {
       if (!attemptMatchOptionByVoice(trimmedText)) {
         const interpreted = interpretGroupFromText(trimmedText);
         if (interpreted) {
-          handleGroupSelection(interpreted);
+          await handleGroupSelection(interpreted);
         } else {
-          speakAndDisplay('개인/생활 또는 공공 중 하나로 다시 말씀해 주세요. 처음 화면으로 돌아갑니다.', {
+          await speakAndDisplay('개인/생활 또는 공공 중에서 다시 골라주세요.', {
             stage: FLOW_STAGES.GROUP_SELECTION,
+            expectChoice: false,
             afterSpeech: () => {
-              resetConversation();
-              promptGroupSelection();
+              setTimeout(() => promptGroupSelection(), 1000);
             }
           });
         }
@@ -581,13 +624,13 @@ const SeniorChatbot = () => {
     }
 
     if (targetStage === FLOW_STAGES.DETAIL) {
-      handleDetailResponse(trimmedText);
+      await handleDetailResponse(trimmedText);
       return;
     }
 
     if (targetStage === FLOW_STAGES.VISIT_HANDOFF) {
       if (!attemptMatchOptionByVoice(trimmedText)) {
-        speakAndDisplay('확인이라고 말씀하시거나 버튼을 눌러 안내를 마무리해 주세요.', {
+        await speakAndDisplay('"확인"이라고 말씀하시거나 버튼을 눌러주세요.', {
           expectChoice: true,
           stage: targetStage
         });
@@ -602,10 +645,10 @@ const SeniorChatbot = () => {
       }
       const yesNo = parseYesNo(trimmedText);
       if (yesNo !== null) {
-        handleYesNoChoice(yesNo);
+        await handleYesNoChoice(yesNo);
         return;
       }
-      speakAndDisplay('버튼을 누르거나 예/아니오, 확인이라고 답해 주세요.', {
+      await speakAndDisplay('"예" 또는 "아니오"로 답해주세요.', {
         expectChoice: true,
         stage: targetStage
       });
@@ -615,8 +658,8 @@ const SeniorChatbot = () => {
     addDebugLog('예상치 못한 입력 단계', targetStage);
   };
 
-  function handleDetailResponse(trimmedText) {
-    const effectiveText = trimmedText || '음성 입력이 감지되지 않아 자동으로 녹음을 종료했습니다.';
+  async function handleDetailResponse(trimmedText) {
+    const effectiveText = trimmedText || '음성 입력이 감지되지 않았습니다.';
     const detailCategory = analyzeComplaint(effectiveText);
     const agency = getAgency(detailCategory);
     const summary = generateSummary(effectiveText, '', detailCategory);
@@ -629,17 +672,14 @@ const SeniorChatbot = () => {
       summary
     }));
     setFlowStage(FLOW_STAGES.SUMMARY_CONFIRM);
-    const response = `민원 내용을 다음과 같이 정리했습니다: ${summary}\n이 내용이 맞습니까? 예 또는 아니오로 답해주세요.`;
-    speakAndDisplay(response, {
+    const response = `말씀하신 내용을 이렇게 정리했습니다. "${summary}" 이 내용이 맞으신가요?`;
+    await speakAndDisplay(response, {
       expectChoice: true,
       stage: FLOW_STAGES.SUMMARY_CONFIRM,
       options: buildYesNoOptions()
     });
   }
 
-  // 선택 음성 처리 (버튼 이벤트는 handleOptionSelection 사용)
-
-  // 민원 저장
   const saveComplaint = async () => {
     const complaintData = {
       groupType: conversationData.groupType,
@@ -651,14 +691,11 @@ const SeniorChatbot = () => {
       guidance: conversationData.guidance,
       printRequested: conversationData.printRequested,
       status: '접수완료',
-      chatLogs: [
-        { speaker: 'user', message: conversationData.fullText },
-        { speaker: 'assistant', message: conversationData.summary }
-      ]
+      timestamp: new Date().toISOString(),
+      chatLogs: chatHistory
     };
 
     try {
-      // 백엔드 API 호출
       const response = await fetch('http://localhost:5000/api/complaints', {
         method: 'POST',
         headers: {
@@ -678,32 +715,43 @@ const SeniorChatbot = () => {
       }
     } catch (error) {
       console.error('❌ API 호출 오류:', error);
-      // 실패 시 localStorage에 백업 저장
-      const complaints = JSON.parse(localStorage.getItem('complaints') || '[]');
-      complaints.push(complaintData);
-      localStorage.setItem('complaints', JSON.stringify(complaints));
-      console.log('📦 로컬에 백업 저장됨');
       addDebugLog('API 오류 - 로컬 백업', error.message);
     }
   };
 
-  // 초기화
   const resetConversation = () => {
-    if (isListening) {
-      stopRecording();
+    if (silenceTimeoutRef.current) {
+      clearTimeout(silenceTimeoutRef.current);
+    }
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+    if (isListening && mediaRecorderRef.current) {
+      try {
+        mediaRecorderRef.current.stop();
+        if (mediaRecorderRef.current.stream) {
+          mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+        }
+      } catch (e) {
+        console.error('녹음 중지 오류:', e);
+      }
     }
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
     }
+    
     updateChoiceOptions([]);
     setChoicePrompt('');
     setPrintCountdown(PRINT_COUNTDOWN_SECONDS);
+    setIsListening(false);
     setScreen('home');
     setFlowStage(FLOW_STAGES.READY);
     setConversationData(createInitialConversationState());
     setCurrentQuestion('');
     setChatHistory([]);
     setManualInput('');
+    setIsSpeaking(false);
+    addDebugLog('전체 초기화 완료', { screen: 'home' });
   };
 
   const handleManualSubmit = async (event) => {
@@ -721,7 +769,6 @@ const SeniorChatbot = () => {
     setDebugLogs([]);
   };
 
-  // 민원 분류
   const analyzeComplaint = (text) => {
     const keywords = {
       '시설': ['가로등', '공원', '시설', '건물', '화장실', '벤치', '놀이터', '도로', '인도'],
@@ -740,7 +787,6 @@ const SeniorChatbot = () => {
     return '기타';
   };
 
-  // 담당 부서
   const getAgency = (category) => {
     const agencies = {
       '복지': '복지정책과',
@@ -754,35 +800,24 @@ const SeniorChatbot = () => {
     return agencies[category] || '민원봉사과';
   };
 
-  // 요약 생성
   const generateSummary = (mainText, additionalText, category) => {
     const combined = additionalText ? `${mainText} ${additionalText}` : mainText;
     const words = combined.split(' ');
     const summary = words.slice(0, 20).join(' ');
-    return `${category} 관련하여 ${summary}${words.length > 20 ? '...' : ''}`;
+    return `${category} 관련: ${summary}${words.length > 20 ? '...' : ''}`;
   };
 
-  // 화면 렌더링
   const renderScreen = () => {
     switch (screen) {
       case 'home':
         return (
           <div className="text-center">
             <div className="mb-12">
-              <h1 className="text-6xl font-bold text-blue-600 mb-6">
-                생활 민원 도우미
-              </h1>
-              <p className="text-3xl text-gray-600 mb-4">
-                불편하신 점을 말씀해 주세요
-              </p>
-              <p className="text-2xl text-gray-500">
-                버튼을 누르고 편하게 말씀하시면 됩니다
-              </p>
+              <h1 className="main-title">생활 민원 도우미</h1>
+              <p className="subtitle">불편하신 점을 말씀해 주세요</p>
+              <p className="description">아래 버튼을 누르고 편하게 말씀하시면 됩니다</p>
             </div>
-            <button
-              onClick={handleStartFlow}
-              className="bg-blue-500 text-white text-4xl font-bold py-12 px-20 rounded-3xl hover:bg-blue-600 transition-all shadow-2xl"
-            >
+            <button onClick={handleStartFlow} className="action-button">
               대화 시작하기
             </button>
           </div>
@@ -795,24 +830,10 @@ const SeniorChatbot = () => {
               <div className="inline-block p-12 bg-red-500 rounded-full animate-pulse mb-8">
                 <Mic size={80} className="text-white" />
               </div>
-              <h2 className="text-5xl font-bold text-gray-800 mb-6">
-                듣고 있습니다
-              </h2>
-              <p className="text-3xl text-gray-600 mb-8">
-                편하게 말씀해 주세요
-              </p>
-              <div className="flex justify-center gap-4 mb-8">
-                <div className="w-6 h-24 bg-red-400 rounded-full animate-pulse"></div>
-                <div className="w-6 h-32 bg-red-400 rounded-full animate-pulse" style={{ animationDelay: '0.1s' }}></div>
-                <div className="w-6 h-28 bg-red-400 rounded-full animate-pulse" style={{ animationDelay: '0.2s' }}></div>
-                <div className="w-6 h-36 bg-red-400 rounded-full animate-pulse" style={{ animationDelay: '0.3s' }}></div>
-                <div className="w-6 h-28 bg-red-400 rounded-full animate-pulse" style={{ animationDelay: '0.4s' }}></div>
-              </div>
+              <h2 className="status-heading">듣고 있습니다</h2>
+              <p className="status-text">편하게 말씀해 주세요</p>
             </div>
-            <button
-              onClick={stopRecording}
-              className="bg-gray-500 text-white text-3xl font-bold py-8 px-16 rounded-3xl hover:bg-gray-600 transition-all"
-            >
+            <button onClick={stopRecording} className="bg-gray-500 text-white text-3xl font-bold py-8 px-16 rounded-3xl hover:bg-gray-600 transition-all">
               말씀 완료
             </button>
           </div>
@@ -825,17 +846,8 @@ const SeniorChatbot = () => {
               <div className="inline-block p-12 bg-blue-500 rounded-full mb-8">
                 <Volume2 size={80} className="text-white animate-bounce" />
               </div>
-              <h2 className="text-5xl font-bold text-gray-800 mb-6">
-                처리 중입니다
-              </h2>
-              <p className="text-3xl text-gray-600">
-                잠시만 기다려 주세요...
-              </p>
-            </div>
-            <div className="flex justify-center gap-3">
-              <div className="w-8 h-8 bg-blue-400 rounded-full animate-bounce"></div>
-              <div className="w-8 h-8 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-              <div className="w-8 h-8 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+              <h2 className="status-heading">처리 중입니다</h2>
+              <p className="status-text">잠시만 기다려 주세요...</p>
             </div>
           </div>
         );
@@ -847,11 +859,14 @@ const SeniorChatbot = () => {
               <div className="inline-block p-12 bg-green-500 rounded-full mb-8">
                 <Volume2 size={80} className="text-white" />
               </div>
-              <div className="bg-white rounded-3xl shadow-xl p-12">
-                <p className="text-3xl text-gray-800 leading-relaxed whitespace-pre-line">
-                  {currentQuestion}
-                </p>
+              <div className="response-box">
+                <p className="response-text">{currentQuestion}</p>
               </div>
+              {isSpeaking && (
+                <p className="text-2xl text-gray-500 mt-6 animate-pulse">
+                  음성 안내 중...
+                </p>
+              )}
             </div>
           </div>
         );
@@ -863,34 +878,32 @@ const SeniorChatbot = () => {
               <h2 className="text-4xl font-bold text-gray-800 mb-12 whitespace-pre-line">
                 {choicePrompt || '옵션 중 하나를 선택해 주세요'}
               </h2>
+              {isSpeaking && (
+                <p className="text-2xl text-gray-500 mb-8 animate-pulse">
+                  음성 안내 중...
+                </p>
+              )}
               <div className="flex justify-center gap-6 flex-wrap">
-                {choiceOptions.length === 0 && (
-                  <p className="text-2xl text-gray-500">선택 가능한 옵션이 없습니다.</p>
-                )}
                 {choiceOptions.map((option) => (
                   <button
                     key={option.key}
                     onClick={() => handleOptionSelection(option)}
-                    className="bg-blue-500 text-white text-3xl font-bold py-10 px-14 rounded-3xl hover:bg-blue-600 transition-all shadow-xl"
+                    disabled={isSpeaking}
+                    className={`choice-button ${ 
+                      isSpeaking 
+                        ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
+                        : 'bg-blue-500 text-white hover:bg-blue-600'
+                    }`}
                   >
                     {option.label}
                   </button>
                 ))}
               </div>
               {flowStage === FLOW_STAGES.PRINT_CONFIRM && (
-                <p className="text-2xl text-gray-500 mt-8">
-                  안내 화면 유지 시간: {printCountdown}초
+                <p className="countdown-text">
+                  남은 시간: {printCountdown}초
                 </p>
               )}
-            </div>
-            <div className="flex flex-col items-center gap-4">
-              <p className="text-2xl text-gray-600">또는 아래 버튼을 눌러 음성으로 답하셔도 됩니다</p>
-              <button
-                onClick={() => startRecording(flowStage)}
-                className="inline-flex items-center gap-3 bg-gray-800 text-white text-2xl font-semibold py-4 px-10 rounded-full hover:bg-gray-900 transition-all"
-              >
-                <Mic size={32} /> 음성으로 답하기
-              </button>
             </div>
           </div>
         );
@@ -904,12 +917,8 @@ const SeniorChatbot = () => {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
                 </svg>
               </div>
-              <h2 className="text-5xl font-bold text-gray-800 mb-6">
-                감사합니다
-              </h2>
-              <p className="text-3xl text-gray-600">
-                이용해 주셔서 감사합니다
-              </p>
+              <h2 className="status-heading">감사합니다</h2>
+              <p className="status-text">민원 접수가 완료되었습니다.</p>
             </div>
           </div>
         );
@@ -919,123 +928,12 @@ const SeniorChatbot = () => {
     }
   };
 
-  const conversationStep = flowStage;
-
   return (
-    <div className="min-h-screen bg-gradient-to-b from-blue-50 to-green-50 flex items-center justify-center p-8">
+    <div className="min-h-screen bg-gradient-to-b from-blue-50 to-green-50 flex items-center justify-center p-4 sm:p-8">
       <div className="w-full max-w-6xl">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-6">
-          <div>
-            <p className="text-sm text-gray-500">현재 상태</p>
-            <p className="text-xl font-semibold text-gray-800">
-              {SCREEN_LABELS[screen] || '진행 중'}
-            </p>
-          </div>
-          <div className="flex gap-3">
-            <button
-              onClick={() => setDebugMode(prev => !prev)}
-              className={`px-5 py-2 rounded-full text-sm font-semibold border ${
-                debugMode ? 'bg-green-100 border-green-400 text-green-700' : 'bg-white border-gray-300 text-gray-600'
-              }`}
-            >
-              {debugMode ? '디버그 모드 ON' : '디버그 모드 OFF'}
-            </button>
-            <button
-              onClick={handleClearLogs}
-              className="px-5 py-2 rounded-full text-sm font-semibold border border-gray-300 text-gray-600 bg-white"
-            >
-              로그 초기화
-            </button>
-          </div>
+        <div className="chatbot-container">
+          {renderScreen()}
         </div>
-
-        {renderScreen()}
-
-        {debugMode && (
-          <div className="mt-10 grid gap-6 md:grid-cols-2">
-            <div className="bg-white/80 rounded-3xl shadow-lg p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-xl font-semibold text-gray-800">디버그 대화</h3>
-                <span className="text-xs text-gray-500">텍스트로 시뮬레이션 가능</span>
-              </div>
-              <form onSubmit={handleManualSubmit} className="mb-4 space-y-3">
-                <textarea
-                  className="w-full border border-gray-200 rounded-2xl p-3 text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-300"
-                  rows="3"
-                  value={manualInput}
-                  onChange={(e) => setManualInput(e.target.value)}
-                  placeholder="여기에 문의 내용을 입력하면 음성 대신 텍스트로 분석됩니다."
-                ></textarea>
-                <button
-                  type="submit"
-                  className="w-full bg-blue-500 text-white font-semibold py-3 rounded-2xl hover:bg-blue-600 transition-all"
-                >
-                  디버그 입력 전송
-                </button>
-              </form>
-              <div className="max-h-72 overflow-y-auto space-y-3">
-                {chatHistory.length === 0 && (
-                  <p className="text-sm text-gray-500">대화 기록이 없습니다. 음성 또는 텍스트로 입력해보세요.</p>
-                )}
-                {chatHistory.map((log, index) => (
-                  <div
-                    key={`${log.speaker}-${index}-${log.text}`}
-                    className={`rounded-2xl p-3 text-sm shadow-sm ${
-                      log.speaker === 'user'
-                        ? 'bg-blue-50 text-blue-900'
-                        : 'bg-green-50 text-green-900'
-                    }`}
-                  >
-                    <p className="text-xs font-semibold mb-1">
-                      {log.speaker === 'user' ? '사용자' : '어시스턴트'}
-                    </p>
-                    <p className="whitespace-pre-line leading-relaxed">{log.text}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="bg-gray-900 text-green-100 rounded-3xl shadow-lg p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-xl font-semibold">처리 로그</h3>
-                <span className="text-xs text-gray-400">실시간 상태</span>
-              </div>
-              <div className="max-h-72 overflow-y-auto space-y-3 font-mono text-xs">
-                {debugLogs.length === 0 && (
-                  <p className="text-gray-400">아직 로그가 없습니다.</p>
-                )}
-                {debugLogs.map((log, index) => (
-                  <div key={`${log.label}-${index}-${log.timestamp}`} className="bg-gray-800 rounded-2xl p-3">
-                    <div className="text-green-300 font-semibold">
-                      [{log.timestamp}] {log.label}
-                    </div>
-                    {log.payload && (
-                      <pre className="mt-2 whitespace-pre-wrap break-words text-green-100">
-                        {typeof log.payload === 'string'
-                          ? log.payload
-                          : JSON.stringify(log.payload, null, 2)}
-                      </pre>
-                    )}
-                  </div>
-                ))}
-              </div>
-              <div className="mt-4 bg-gray-800 rounded-2xl p-4">
-                <p className="text-xs text-gray-400 mb-2">현재 컨텍스트</p>
-                <pre className="text-xs whitespace-pre-wrap break-words">
-                  {JSON.stringify(
-                    {
-                      step: conversationStep,
-                      screen,
-                      ...conversationData
-                    },
-                    null,
-                    2
-                  )}
-                </pre>
-              </div>
-            </div>
-          </div>
-        )}
 
         {screen !== 'home' && (
           <div className="fixed bottom-8 right-8">
@@ -1049,6 +947,12 @@ const SeniorChatbot = () => {
           </div>
         )}
       </div>
+      {showPrintModal && (
+        <PrintModal 
+          conversationData={conversationData} 
+          onClose={handleCloseModalAndReset} 
+        />
+      )}
     </div>
   );
 };
