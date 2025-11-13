@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Mic, MicOff, Volume2, Home } from 'lucide-react';
+import React, { useState, useRef } from 'react';
+import { Mic, Volume2, Home } from 'lucide-react';
 
 const SeniorChatbot = () => {
   const [screen, setScreen] = useState('home'); // home, listening, processing, response, thankyou
@@ -13,10 +13,34 @@ const SeniorChatbot = () => {
   const [currentQuestion, setCurrentQuestion] = useState('');
   const [conversationStep, setConversationStep] = useState(0);
   const [audioBlob, setAudioBlob] = useState(null);
-  
+  const [debugMode, setDebugMode] = useState(false);
+  const [manualInput, setManualInput] = useState('');
+  const [chatHistory, setChatHistory] = useState([]);
+  const [debugLogs, setDebugLogs] = useState([]);
+
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const timeoutRef = useRef(null);
+
+  const screenLabels = {
+    home: '대기 중',
+    listening: '음성 수집',
+    processing: '분석 중',
+    response: '응답 중',
+    choice: '사용자 선택 대기',
+    thankyou: '대화 종료'
+  };
+
+  const addDebugLog = (label, payload) => {
+    setDebugLogs(prev => [
+      ...prev,
+      {
+        timestamp: new Date().toLocaleTimeString(),
+        label,
+        payload
+      }
+    ]);
+  };
 
   // 음성 합성 함수
   const speak = (text) => {
@@ -37,6 +61,7 @@ const SeniorChatbot = () => {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaRecorderRef.current = new MediaRecorder(stream);
       audioChunksRef.current = [];
+      addDebugLog('녹음 시작', { screen: 'listening' });
 
       mediaRecorderRef.current.ondataavailable = (event) => {
         audioChunksRef.current.push(event.data);
@@ -45,6 +70,7 @@ const SeniorChatbot = () => {
       mediaRecorderRef.current.onstop = async () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
         setAudioBlob(audioBlob);
+        addDebugLog('녹음 종료', { size: audioBlob.size });
         await processAudio(audioBlob);
         stream.getTracks().forEach(track => track.stop());
       };
@@ -60,6 +86,7 @@ const SeniorChatbot = () => {
 
     } catch (error) {
       console.error('마이크 접근 오류:', error);
+      addDebugLog('마이크 오류', error.message);
       alert('마이크 사용 권한이 필요합니다.');
     }
   };
@@ -78,7 +105,8 @@ const SeniorChatbot = () => {
   // Whisper API로 음성을 텍스트로 변환
   const processAudio = async (audioBlob) => {
     setScreen('processing');
-    
+    addDebugLog('음성 처리 시작', { size: audioBlob.size });
+
     try {
       // 실제 Whisper API 호출 (여기서는 시뮬레이션)
       // const formData = new FormData();
@@ -99,11 +127,13 @@ const SeniorChatbot = () => {
       // 시뮬레이션 (실제로는 위 코드 사용)
       await new Promise(resolve => setTimeout(resolve, 2000));
       const userText = "우리 동네 공원에 가로등이 고장나서 밤에 너무 어두워요. 언제 고칠 수 있을까요?";
-      
+      addDebugLog('음성 → 텍스트 결과', userText);
+
       await analyzeAndRespond(userText);
-      
+
     } catch (error) {
       console.error('음성 처리 오류:', error);
+      addDebugLog('음성 처리 오류', error.message);
       speak('죄송합니다. 다시 한 번 말씀해 주시겠어요?');
       setScreen('home');
     }
@@ -111,11 +141,18 @@ const SeniorChatbot = () => {
 
   // 대화 분석 및 응답 생성
   const analyzeAndRespond = async (userText) => {
+    const trimmedText = userText.trim();
+    if (!trimmedText) {
+      return;
+    }
     setScreen('processing');
+    setChatHistory(prev => [...prev, { speaker: 'user', text: trimmedText }]);
+    addDebugLog('사용자 입력 수신', trimmedText);
 
     // 민원 분류
-    const category = analyzeComplaint(userText);
+    const category = analyzeComplaint(trimmedText);
     const agency = getAgency(category);
+    addDebugLog('분류 결과', { category, agency });
 
     let response = '';
     let nextStep = conversationStep;
@@ -128,23 +165,26 @@ const SeniorChatbot = () => {
         ...prev,
         category,
         agency,
-        fullText: userText
+        fullText: trimmedText
       }));
     } else if (conversationStep === 1) {
       // 추가 정보 수집 후
-      const summary = generateSummary(conversationData.fullText, userText, category);
+      const summary = generateSummary(conversationData.fullText, trimmedText, category);
       response = `네, 잘 알겠습니다. 말씀하신 내용을 정리하면, ${summary} 이 내용으로 민원을 접수하시겠습니까?`;
       nextStep = 2;
       setConversationData(prev => ({
         ...prev,
-        fullText: prev.fullText + ' ' + userText,
+        fullText: prev.fullText + ' ' + trimmedText,
         summary
       }));
+      addDebugLog('요약 생성', summary);
     }
 
     setConversationStep(nextStep);
     setCurrentQuestion(response);
     setScreen('response');
+    setChatHistory(prev => [...prev, { speaker: 'assistant', text: response }]);
+    addDebugLog('응답 출력', response);
     speak(response);
 
     // 응답 후 자동으로 추가 질문 여부 확인
@@ -177,18 +217,21 @@ const SeniorChatbot = () => {
       if (isYes) {
         // 추가 질문 있음
         speak('말씀해 주세요.');
+        addDebugLog('사용자 선택', { choice: '예', step: conversationStep });
         setTimeout(() => startRecording(), 2000);
       } else {
         // 추가 질문 없음 - 민원 요약 및 접수 확인
         const summary = generateSummary(conversationData.fullText, '', conversationData.category);
         setConversationData(prev => ({ ...prev, summary }));
         setConversationStep(2);
-        
+
         const response = `말씀하신 내용을 정리하면, ${summary} 이 내용으로 민원을 접수하시겠습니까?`;
         setCurrentQuestion(response);
         setScreen('response');
+        setChatHistory(prev => [...prev, { speaker: 'assistant', text: response }]);
+        addDebugLog('요약 재확인', summary);
         speak(response);
-        
+
         setTimeout(() => confirmSubmission(), response.length * 80);
       }
     } else {
@@ -196,6 +239,7 @@ const SeniorChatbot = () => {
         // 민원 접수
         await saveComplaint();
         setScreen('thankyou');
+        addDebugLog('사용자 선택', { choice: '예', step: conversationStep });
         speak('민원이 정상적으로 접수되었습니다. 담당 부서에서 3일에서 5일 이내에 연락드리겠습니다. 이용해 주셔서 감사합니다.');
         
         setTimeout(() => {
@@ -204,6 +248,7 @@ const SeniorChatbot = () => {
       } else {
         // 취소
         setScreen('thankyou');
+        addDebugLog('사용자 선택', { choice: '아니오', step: conversationStep });
         speak('민원 접수가 취소되었습니다. 이용해 주셔서 감사합니다.');
         setTimeout(() => resetConversation(), 5000);
       }
@@ -235,11 +280,13 @@ const SeniorChatbot = () => {
       });
 
       const result = await response.json();
-      
+
       if (result.success) {
         console.log('✅ 민원 저장 완료:', result.data);
+        addDebugLog('민원 저장 완료', result.data);
       } else {
         console.error('❌ 민원 저장 실패:', result.message);
+        addDebugLog('민원 저장 실패', result.message);
       }
     } catch (error) {
       console.error('❌ API 호출 오류:', error);
@@ -248,6 +295,7 @@ const SeniorChatbot = () => {
       complaints.push(complaintData);
       localStorage.setItem('complaints', JSON.stringify(complaints));
       console.log('📦 로컬에 백업 저장됨');
+      addDebugLog('API 오류 - 로컬 백업', error.message);
     }
   };
 
@@ -262,6 +310,23 @@ const SeniorChatbot = () => {
       fullText: ''
     });
     setCurrentQuestion('');
+    setChatHistory([]);
+    setManualInput('');
+  };
+
+  const handleManualSubmit = async (event) => {
+    event.preventDefault();
+    const text = manualInput.trim();
+    if (!text) {
+      return;
+    }
+    setManualInput('');
+    await analyzeAndRespond(text);
+  };
+
+  const handleClearLogs = () => {
+    setChatHistory([]);
+    setDebugLogs([]);
   };
 
   // 민원 분류
@@ -452,8 +517,119 @@ const SeniorChatbot = () => {
   return (
     <div className="min-h-screen bg-gradient-to-b from-blue-50 to-green-50 flex items-center justify-center p-8">
       <div className="w-full max-w-6xl">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-6">
+          <div>
+            <p className="text-sm text-gray-500">현재 상태</p>
+            <p className="text-xl font-semibold text-gray-800">
+              {screenLabels[screen] || '진행 중'}
+            </p>
+          </div>
+          <div className="flex gap-3">
+            <button
+              onClick={() => setDebugMode(prev => !prev)}
+              className={`px-5 py-2 rounded-full text-sm font-semibold border ${
+                debugMode ? 'bg-green-100 border-green-400 text-green-700' : 'bg-white border-gray-300 text-gray-600'
+              }`}
+            >
+              {debugMode ? '디버그 모드 ON' : '디버그 모드 OFF'}
+            </button>
+            <button
+              onClick={handleClearLogs}
+              className="px-5 py-2 rounded-full text-sm font-semibold border border-gray-300 text-gray-600 bg-white"
+            >
+              로그 초기화
+            </button>
+          </div>
+        </div>
+
         {renderScreen()}
-        
+
+        {debugMode && (
+          <div className="mt-10 grid gap-6 md:grid-cols-2">
+            <div className="bg-white/80 rounded-3xl shadow-lg p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xl font-semibold text-gray-800">디버그 대화</h3>
+                <span className="text-xs text-gray-500">텍스트로 시뮬레이션 가능</span>
+              </div>
+              <form onSubmit={handleManualSubmit} className="mb-4 space-y-3">
+                <textarea
+                  className="w-full border border-gray-200 rounded-2xl p-3 text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-300"
+                  rows="3"
+                  value={manualInput}
+                  onChange={(e) => setManualInput(e.target.value)}
+                  placeholder="여기에 문의 내용을 입력하면 음성 대신 텍스트로 분석됩니다."
+                ></textarea>
+                <button
+                  type="submit"
+                  className="w-full bg-blue-500 text-white font-semibold py-3 rounded-2xl hover:bg-blue-600 transition-all"
+                >
+                  디버그 입력 전송
+                </button>
+              </form>
+              <div className="max-h-72 overflow-y-auto space-y-3">
+                {chatHistory.length === 0 && (
+                  <p className="text-sm text-gray-500">대화 기록이 없습니다. 음성 또는 텍스트로 입력해보세요.</p>
+                )}
+                {chatHistory.map((log, index) => (
+                  <div
+                    key={`${log.speaker}-${index}-${log.text}`}
+                    className={`rounded-2xl p-3 text-sm shadow-sm ${
+                      log.speaker === 'user'
+                        ? 'bg-blue-50 text-blue-900'
+                        : 'bg-green-50 text-green-900'
+                    }`}
+                  >
+                    <p className="text-xs font-semibold mb-1">
+                      {log.speaker === 'user' ? '사용자' : '어시스턴트'}
+                    </p>
+                    <p className="whitespace-pre-line leading-relaxed">{log.text}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="bg-gray-900 text-green-100 rounded-3xl shadow-lg p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xl font-semibold">처리 로그</h3>
+                <span className="text-xs text-gray-400">실시간 상태</span>
+              </div>
+              <div className="max-h-72 overflow-y-auto space-y-3 font-mono text-xs">
+                {debugLogs.length === 0 && (
+                  <p className="text-gray-400">아직 로그가 없습니다.</p>
+                )}
+                {debugLogs.map((log, index) => (
+                  <div key={`${log.label}-${index}-${log.timestamp}`} className="bg-gray-800 rounded-2xl p-3">
+                    <div className="text-green-300 font-semibold">
+                      [{log.timestamp}] {log.label}
+                    </div>
+                    {log.payload && (
+                      <pre className="mt-2 whitespace-pre-wrap break-words text-green-100">
+                        {typeof log.payload === 'string'
+                          ? log.payload
+                          : JSON.stringify(log.payload, null, 2)}
+                      </pre>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 bg-gray-800 rounded-2xl p-4">
+                <p className="text-xs text-gray-400 mb-2">현재 컨텍스트</p>
+                <pre className="text-xs whitespace-pre-wrap break-words">
+                  {JSON.stringify(
+                    {
+                      step: conversationStep,
+                      screen,
+                      ...conversationData
+                    },
+                    null,
+                    2
+                  )}
+                </pre>
+              </div>
+            </div>
+          </div>
+        )}
+
         {screen !== 'home' && (
           <div className="fixed bottom-8 right-8">
             <button
