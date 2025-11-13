@@ -64,6 +64,7 @@ npm install
 
 **백엔드 (Express 서버):**
 ```bash
+# 백엔드
 cd backend
 npm run dev   # nodemon을 사용하여 자동 재시작
 # 또는 npm start로 일반 실행
